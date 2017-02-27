@@ -4661,6 +4661,7 @@ static int synaptics_rmi4_fb_notifier_cb(struct notifier_block *self,
 		unsigned long event, void *data)
 {
 	int *transition;
+	bool disable_touch;
 	struct fb_event *evdata = data;
 	struct synaptics_rmi4_data *rmi4_data =
 			container_of(self, struct synaptics_rmi4_data,
@@ -4669,7 +4670,20 @@ static int synaptics_rmi4_fb_notifier_cb(struct notifier_block *self,
 	if (evdata && evdata->data && rmi4_data) {
 		if (event == FB_EVENT_BLANK) {
 			transition = evdata->data;
-			if (*transition == FB_BLANK_POWERDOWN) {
+			switch (*transition) {
+			case FB_BLANK_UNBLANK:
+			case FB_BLANK_NORMAL:
+			case FB_BLANK_VSYNC_SUSPEND:
+			case FB_BLANK_HSYNC_SUSPEND:
+				disable_touch = false;
+				break;
+			case FB_BLANK_POWERDOWN:
+			default:
+				disable_touch = true;
+				break;
+
+			}
+			if (disable_touch) {
 				synaptics_rmi4_suspend(&rmi4_data->pdev->dev);
 				rmi4_data->fb_ready = false;
 #ifdef TOUCH_WAKEUP_EVENT_RECORD
@@ -4678,9 +4692,7 @@ static int synaptics_rmi4_fb_notifier_cb(struct notifier_block *self,
 					atomic_set(&wakeup_flag, 0);
 				}
 #endif
-			} else if ((*transition == FB_BLANK_UNBLANK) ||
-				(*transition == FB_BLANK_VSYNC_SUSPEND &&
-				rmi4_data->suspend)) {
+			} else {
 				synaptics_rmi4_resume(&rmi4_data->pdev->dev);
 				rmi4_data->fb_ready = true;
 #ifdef TOUCH_WAKEUP_EVENT_RECORD
