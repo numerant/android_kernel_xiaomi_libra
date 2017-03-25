@@ -2684,6 +2684,10 @@ struct asm_flac_cfg {
 	u16 md5_sum;
 };
 
+struct asm_vorbis_cfg {
+	u32 bit_stream_fmt;
+};
+
 struct asm_softpause_params {
 	u32 enable;
 	u32 period;
@@ -3130,6 +3134,21 @@ struct asm_aac_enc_cfg_v2 {
  * Native mode indicates that encoding must be performed with the
  * sampling rate at the input.
  * The sampling rate must not change during encoding.
+ */
+
+} __packed;
+
+struct asm_vorbis_fmt_blk_v2 {
+	struct apr_hdr hdr;
+	struct asm_data_cmd_media_fmt_update_v2 fmtblk;
+	u32          bit_stream_fmt;
+/* Bit stream format.
+ * Supported values:
+ * - 0 -- Raw bitstream
+ * - 1 -- Transcoded bitstream
+ *
+ * Transcoded bitstream containing the size of the frame as the first
+ * word in each frame.
  */
 
 } __packed;
@@ -3601,11 +3620,12 @@ struct asm_amrwbplus_fmt_blk_v2 {
 
 } __packed;
 
-#define ASM_MEDIA_FMT_AC3_DEC                   0x00010BF6
-#define ASM_MEDIA_FMT_EAC3_DEC                   0x00010C3C
+#define ASM_MEDIA_FMT_AC3_DEC                0x00010BF6
+#define ASM_MEDIA_FMT_EAC3_DEC               0x00010C3C
 #define ASM_MEDIA_FMT_DTS                    0x00010D88
 #define ASM_MEDIA_FMT_MP2                    0x00010DE9
 #define ASM_MEDIA_FMT_FLAC                   0x00010C16
+#define ASM_MEDIA_FMT_VORBIS                 0x00010C15
 
 
 /* Media format ID for adaptive transform acoustic coding. This
