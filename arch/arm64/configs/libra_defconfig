@@ -3773,6 +3773,8 @@ CONFIG_MACH_LIBRA=y
 # TouchSense driver support
 #
 CONFIG_TSPDRV=y
+# CONFIG_TSPDRV_DRV2604 is not set
+CONFIG_TSPDRV_ISA1000=y
 
 #
 # Firmware Drivers
