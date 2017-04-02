@@ -1,4 +1,4 @@
-/* Copyright (c) 2014, 2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,8 +34,6 @@
 #include <linux/string_helpers.h>
 #include <linux/alarmtimer.h>
 #include <linux/qpnp-revid.h>
-
-#define CONFIG_MACH_XIAOMI_MSM8992 1
 
 /* Register offsets */
 
@@ -209,13 +207,8 @@ static struct fg_mem_setting settings[FG_MEM_SETTING_MAX] = {
 	SETTING(BCL_MH_THRESHOLD, 0x47C,   3,      752),
 	SETTING(TERM_CURRENT,	 0x40C,   2,      250),
 	SETTING(CHG_TERM_CURRENT, 0x4F8,   2,      250),
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	SETTING(IRQ_VOLT_EMPTY,	 0x458,   3,      3350),
-	SETTING(CUTOFF_VOLTAGE,	 0x40C,   0,      3400),
-#else
 	SETTING(IRQ_VOLT_EMPTY,	 0x458,   3,      3100),
 	SETTING(CUTOFF_VOLTAGE,	 0x40C,   0,      3200),
-#endif
 	SETTING(VBAT_EST_DIFF,	 0x000,   0,      30),
 	SETTING(DELTA_SOC,	 0x450,   3,      1),
 	SETTING(SOC_MAX,	 0x458,   1,      85),
@@ -265,11 +258,7 @@ module_param_named(
 	battery_type, fg_batt_type, charp, S_IRUSR | S_IWUSR
 );
 
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-static int fg_sram_update_period_ms = 3000;
-#else
 static int fg_sram_update_period_ms = 30000;
-#endif
 module_param_named(
 	sram_update_period_ms, fg_sram_update_period_ms, int, S_IRUSR | S_IWUSR
 );
@@ -429,9 +418,6 @@ struct fg_chip {
 	struct delayed_work	update_sram_data;
 	struct delayed_work	update_temp_work;
 	struct delayed_work	check_empty_work;
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	struct delayed_work	soc_work;
-#endif
 	char			*batt_profile;
 	u8			thermal_coefficients[THERMAL_COEFF_N_BYTES];
 	u32			cc_cv_threshold_mv;
@@ -462,9 +448,6 @@ struct fg_chip {
 	struct fg_cyc_ctr_data	cyc_ctr;
 	/* interleaved memory access */
 	u16			*offset;
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	int			last_soc;
-#endif
 	bool			jeita_hysteresis_support;
 	bool			batt_hot;
 	bool			batt_cold;
@@ -501,7 +484,6 @@ struct fg_trans {
 	struct fg_chip *chip;
 	struct fg_log_buffer *log; /* log buffer */
 	u8 *data;	/* fg data that is read */
-	struct mutex memif_dfs_lock; /* Prevent thread concurrency */
 };
 
 struct fg_dbgfs {
@@ -1197,8 +1179,6 @@ static bool fg_is_batt_empty(struct fg_chip *chip)
 	return (fg_soc_sts & SOC_EMPTY) != 0;
 }
 
-static int get_sram_prop_now(struct fg_chip *chip, unsigned int type);
-
 static int get_monotonic_soc_raw(struct fg_chip *chip)
 {
 	u8 cap[2];
@@ -1258,39 +1238,6 @@ static int get_prop_capacity(struct fg_chip *chip)
 	return DIV_ROUND_CLOSEST((msoc - 1) * (FULL_CAPACITY - 2),
 			FULL_SOC_RAW - 2) + 1;
 }
-
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-static int get_last_soc(struct fg_chip *chip)
-{
-	u8 cap[2];
-	int rc, capacity = 0, tries = 0;
-
-	while (tries < MAX_TRIES_SOC) {
-		rc = fg_read(chip, cap,
-				chip->soc_base + SOC_MONOTONIC_SOC, 2);
-		if (rc) {
-			pr_err("spmi read failed: addr=%03x, rc=%d\n",
-				chip->soc_base + SOC_MONOTONIC_SOC, rc);
-			return rc;
-		}
-
-		if (cap[0] == cap[1])
-			break;
-
-		tries++;
-	}
-
-	if (tries == MAX_TRIES_SOC) {
-		pr_err("shadow registers do not match\n");
-		return DEFAULT_CAPACITY;
-	}
-
-	if (cap[0] > 0)
-		capacity = (cap[0] * 100 / FULL_PERCENT);
-
-	return capacity;
-}
-#endif
 
 #define HIGH_BIAS	3
 #define MED_BIAS	BIT(1)
@@ -1607,25 +1554,6 @@ resched:
 	}
 	fg_relax(&chip->update_sram_wakeup_source);
 }
-
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-#define SOC_WORK_MS	20000
-static void soc_work_fn(struct work_struct *work)
-{	struct fg_chip *chip = container_of(work,
-				struct fg_chip,
-				soc_work.work);
-	pr_debug("adjust_soc: s %d i %d v %d t %d\n",
-			get_prop_capacity(chip),
-			get_sram_prop_now(chip, FG_DATA_CURRENT),
-			get_sram_prop_now(chip, FG_DATA_VOLTAGE),
-			get_sram_prop_now(chip, FG_DATA_BATT_TEMP));
-
-	schedule_delayed_work(
-		&chip->soc_work,
-		msecs_to_jiffies(SOC_WORK_MS));
-
-}
-#endif
 
 #define SRAM_TIMEOUT_MS			3000
 static void update_sram_data_work(struct work_struct *work)
@@ -4489,9 +4417,6 @@ static int fg_init_irqs(struct fg_chip *chip)
 
 static void fg_cleanup(struct fg_chip *chip)
 {
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	cancel_delayed_work_sync(&chip->soc_work);
-#endif
 	cancel_delayed_work_sync(&chip->update_sram_data);
 	cancel_delayed_work_sync(&chip->update_temp_work);
 	cancel_delayed_work_sync(&chip->update_jeita_setting);
@@ -4581,7 +4506,6 @@ static int fg_memif_data_open(struct inode *inode, struct file *file)
 	trans->addr = dbgfs_data.addr;
 	trans->chip = dbgfs_data.chip;
 	trans->offset = trans->addr;
-	mutex_init(&trans->memif_dfs_lock);
 
 	file->private_data = trans;
 	return 0;
@@ -4593,7 +4517,6 @@ static int fg_memif_dfs_close(struct inode *inode, struct file *file)
 
 	if (trans && trans->log && trans->data) {
 		file->private_data = NULL;
-		mutex_destroy(&trans->memif_dfs_lock);
 		kfree(trans->log);
 		kfree(trans->data);
 		kfree(trans);
@@ -4751,13 +4674,10 @@ static ssize_t fg_memif_dfs_reg_read(struct file *file, char __user *buf,
 	size_t ret;
 	size_t len;
 
-	mutex_lock(&trans->memif_dfs_lock);
 	/* Is the the log buffer empty */
 	if (log->rpos >= log->wpos) {
-		if (get_log_data(trans) <= 0) {
-			len = 0;
-			goto unlock_mutex;
-		}
+		if (get_log_data(trans) <= 0)
+			return 0;
 	}
 
 	len = min(count, log->wpos - log->rpos);
@@ -4765,8 +4685,7 @@ static ssize_t fg_memif_dfs_reg_read(struct file *file, char __user *buf,
 	ret = copy_to_user(buf, &log->data[log->rpos], len);
 	if (ret == len) {
 		pr_err("error copy sram register values to user\n");
-		len = -EFAULT;
-		goto unlock_mutex;
+		return -EFAULT;
 	}
 
 	/* 'ret' is the number of bytes not copied */
@@ -4774,9 +4693,6 @@ static ssize_t fg_memif_dfs_reg_read(struct file *file, char __user *buf,
 
 	*ppos += len;
 	log->rpos += len;
-
-unlock_mutex:
-	mutex_unlock(&trans->memif_dfs_lock);
 	return len;
 }
 
@@ -4797,20 +4713,14 @@ static ssize_t fg_memif_dfs_reg_write(struct file *file, const char __user *buf,
 	int cnt = 0;
 	u8  *values;
 	size_t ret = 0;
-	char *kbuf;
-	u32 offset;
 
 	struct fg_trans *trans = file->private_data;
-
-	mutex_lock(&trans->memif_dfs_lock);
-	offset = trans->offset;
+	u32 offset = trans->offset;
 
 	/* Make a copy of the user data */
-	kbuf = kmalloc(count + 1, GFP_KERNEL);
-	if (!kbuf) {
-		ret = -ENOMEM;
-		goto unlock_mutex;
-	}
+	char *kbuf = kmalloc(count + 1, GFP_KERNEL);
+	if (!kbuf)
+		return -ENOMEM;
 
 	ret = copy_from_user(kbuf, buf, count);
 	if (ret == count) {
@@ -4849,8 +4759,6 @@ static ssize_t fg_memif_dfs_reg_write(struct file *file, const char __user *buf,
 
 free_buf:
 	kfree(kbuf);
-unlock_mutex:
-	mutex_unlock(&trans->memif_dfs_lock);
 	return ret;
 }
 
@@ -5042,7 +4950,7 @@ static int fg_common_hw_init(struct fg_chip *chip)
 	}
 
 	rc = fg_mem_masked_write(chip, settings[FG_MEM_DELTA_SOC].address, 0xFF,
-			settings[FG_MEM_DELTA_SOC].value == 1 ? 1 : soc_to_setpoint(settings[FG_MEM_DELTA_SOC].value),
+			soc_to_setpoint(settings[FG_MEM_DELTA_SOC].value),
 			settings[FG_MEM_DELTA_SOC].offset);
 	if (rc) {
 		pr_err("failed to write delta soc rc=%d\n", rc);
@@ -5289,12 +5197,6 @@ static void delayed_init_work(struct work_struct *work)
 	if (chip->last_temp_update_time == 0)
 		update_temp_data(&chip->update_temp_work.work);
 
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	schedule_delayed_work(
-		&chip->soc_work,
-		msecs_to_jiffies(SOC_WORK_MS));
-#endif
-
 	if (!chip->use_otp_profile)
 		schedule_work(&chip->batt_profile_init);
 
@@ -5350,9 +5252,6 @@ static int fg_probe(struct spmi_device *spmi)
 	INIT_DELAYED_WORK(&chip->update_sram_data, update_sram_data_work);
 	INIT_DELAYED_WORK(&chip->update_temp_work, update_temp_data);
 	INIT_DELAYED_WORK(&chip->check_empty_work, check_empty_work);
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	INIT_DELAYED_WORK(&chip->soc_work, soc_work_fn);
-#endif
 	INIT_WORK(&chip->rslow_comp_work, rslow_comp_work);
 	INIT_WORK(&chip->fg_cap_learning_work, fg_cap_learning_work);
 	INIT_WORK(&chip->batt_profile_init, batt_profile_init);
@@ -5500,10 +5399,6 @@ static int fg_probe(struct spmi_device *spmi)
 		}
 	}
 
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	chip->last_soc = get_last_soc(chip);
-	pr_debug("last soc %d\n", chip->last_soc);
-#endif
 	schedule_work(&chip->init_work);
 
 	pr_info("FG Probe success - FG Revision DIG:%d.%d ANA:%d.%d PMIC subtype=%d\n",
@@ -5520,9 +5415,6 @@ cancel_work:
 	cancel_delayed_work_sync(&chip->update_sram_data);
 	cancel_delayed_work_sync(&chip->update_temp_work);
 	cancel_delayed_work_sync(&chip->check_empty_work);
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	cancel_delayed_work_sync(&chip->soc_work);
-#endif
 	alarm_try_to_cancel(&chip->fg_cap_learning_alarm);
 	cancel_work_sync(&chip->set_resume_soc_work);
 	cancel_work_sync(&chip->fg_cap_learning_work);
@@ -5577,11 +5469,6 @@ static void check_and_update_sram_data(struct fg_chip *chip)
 
 	schedule_delayed_work(
 		&chip->update_sram_data, msecs_to_jiffies(time_left * 1000));
-
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	schedule_delayed_work(
-		&chip->soc_work, msecs_to_jiffies(SOC_WORK_MS));
-#endif
 }
 
 static int fg_suspend(struct device *dev)
@@ -5591,9 +5478,6 @@ static int fg_suspend(struct device *dev)
 	if (!chip->sw_rbias_ctrl)
 		return 0;
 
-#ifdef CONFIG_MACH_XIAOMI_MSM8992
-	cancel_delayed_work(&chip->soc_work);
-#endif
 	cancel_delayed_work(&chip->update_temp_work);
 	cancel_delayed_work(&chip->update_sram_data);
 
